@@ -455,6 +455,11 @@ public final class OzoneConfigKeys {
   public static final boolean OZONE_CLIENT_KEY_LATEST_VERSION_LOCATION_DEFAULT =
       true;
 
+  public static final String OZONE_KUBERNETES_ENABLED =
+          "ozone.kubernetes.enabled";
+  public static final boolean OZONE_KUBERNETES_ENABLED_DEFAULT =
+          false;
+
   /**
    * There is no need to instantiate this class.
    */

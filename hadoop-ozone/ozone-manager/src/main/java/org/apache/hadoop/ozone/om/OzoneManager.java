@@ -107,6 +107,7 @@ import org.apache.hadoop.ozone.audit.AuditMessage;
 import org.apache.hadoop.ozone.audit.Auditor;
 import org.apache.hadoop.ozone.audit.OMAction;
 import org.apache.hadoop.ozone.common.Storage.StorageState;
+import org.apache.hadoop.ozone.ha.KubernetesUtils;
 import org.apache.hadoop.ozone.om.exceptions.OMException;
 import org.apache.hadoop.ozone.om.exceptions.OMException.ResultCodes;
 import org.apache.hadoop.ozone.om.exceptions.OMLeaderNotReadyException;
@@ -216,6 +217,8 @@ import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_ADMINISTRATORS;
 import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_ADMINISTRATORS_WILDCARD;
 import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_KEY_PREALLOCATION_BLOCKS_MAX;
 import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_KEY_PREALLOCATION_BLOCKS_MAX_DEFAULT;
+import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_KUBERNETES_ENABLED;
+import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_KUBERNETES_ENABLED_DEFAULT;
 import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_SCM_BLOCK_SIZE;
 import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_SCM_BLOCK_SIZE_DEFAULT;
 import static org.apache.hadoop.ozone.OzoneConsts.DB_TRANSIENT_MARKER;
@@ -949,6 +952,10 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     }
 
     InetSocketAddress omNodeRpcAddr = OmUtils.getOmAddress(conf);
+    boolean kubernetesEnabled = conf.getBoolean(OZONE_KUBERNETES_ENABLED, OZONE_KUBERNETES_ENABLED_DEFAULT);
+    if (kubernetesEnabled && omNodeRpcAddr.getAddress() == null) {
+      omNodeRpcAddr = KubernetesUtils.getAddressWithHostName(omNodeRpcAddr);
+    }
 
     final int handlerCount = conf.getInt(OZONE_OM_HANDLER_COUNT_KEY,
         OZONE_OM_HANDLER_COUNT_DEFAULT);
@@ -1715,16 +1722,31 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     CertificateSignRequest.Builder builder = client.getCSRBuilder();
     KeyPair keyPair = new KeyPair(client.getPublicKey(),
         client.getPrivateKey());
-    InetSocketAddress omRpcAdd;
-    omRpcAdd = OmUtils.getOmAddress(config);
-    if (omRpcAdd == null || omRpcAdd.getAddress() == null) {
+
+    boolean kubernetesEnabled = config.getBoolean(OZONE_KUBERNETES_ENABLED, OZONE_KUBERNETES_ENABLED_DEFAULT);
+    InetSocketAddress omRpcAdd = OmUtils.getOmAddress(config);
+    String hostname = omRpcAdd.getHostName();
+    int port = omRpcAdd.getPort();
+    String ip = null;
+
+    boolean addressResolvable = omRpcAdd != null && omRpcAdd.getAddress() != null;
+    if (kubernetesEnabled && !addressResolvable) {
+      InetSocketAddress omRpcAddWithHostName = KubernetesUtils.getAddressWithHostName(omRpcAdd);
+      if (omRpcAddWithHostName != null && omRpcAddWithHostName.getAddress() != null) {
+        addressResolvable = true;
+        ip = omRpcAddWithHostName.getAddress().getHostAddress();
+      }
+    }
+
+    if (!addressResolvable) {
       LOG.error("Incorrect om rpc address. omRpcAdd:{}", omRpcAdd);
       throw new RuntimeException("Can't get SCM signed certificate. " +
-          "omRpcAdd: " + omRpcAdd);
+              "omRpcAdd: " + omRpcAdd);
     }
-    // Get host name.
-    String hostname = omRpcAdd.getAddress().getHostName();
-    String ip = omRpcAdd.getAddress().getHostAddress();
+
+    if (ip == null) {
+      ip = omRpcAdd.getAddress().getHostAddress();
+    }
 
     String subject;
     if (builder.hasDnsName()) {
@@ -1755,12 +1777,12 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
 
     HddsProtos.OzoneManagerDetailsProto.Builder omDetailsProtoBuilder =
         HddsProtos.OzoneManagerDetailsProto.newBuilder()
-            .setHostName(omRpcAdd.getHostName())
+            .setHostName(hostname)
             .setIpAddress(ip)
             .setUuid(omStore.getOmId())
             .addPorts(HddsProtos.Port.newBuilder()
                 .setName(RPC_PORT)
-                .setValue(omRpcAdd.getPort())
+                .setValue(port)
                 .build());
 
     PKCS10CertificationRequest csr = builder.build();
